@@ -3976,6 +3976,19 @@ html[data-theme="light"] .najdi-triangles-divider.to-dark {
    MADAR Scroll Reveal System (Subtle & Premium Fade-in on Scroll)
    Prefix all new CSS classes with 'madar-'
    ========================================================================== */
+:root {
+  --madar-reveal-duration: 0.72s;
+  --madar-reveal-distance: 20px;
+  --madar-reveal-blur: 5px;
+}
+
+@media (max-width: 768px) {
+  :root {
+    --madar-reveal-duration: 0.58s;
+    --madar-reveal-distance: 12px;
+    --madar-reveal-blur: 3px;
+  }
+}
 
 /* Container groups must never be hidden - they only coordinate their items */
 html.madar-js [data-madar-reveal="group"],
@@ -3990,9 +4003,9 @@ html.madar-js [data-madar-group] {
 /* Hidden initial state: only active after JS runs, reduced-motion is not requested, and not yet revealed */
 html.madar-js:not(.madar-reduced-motion) [data-madar-reveal]:not([data-madar-reveal="group"]):not(.madar-revealed) {
   opacity: 0;
-  transform: translate3d(0, 24px, 0);
+  transform: translate3d(0, var(--madar-reveal-distance), 0);
   transition-property: opacity, transform, filter;
-  transition-duration: 0.9s;
+  transition-duration: var(--madar-reveal-duration);
   transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
   will-change: opacity, transform, filter;
 }
@@ -4003,14 +4016,14 @@ html.madar-js:not(.madar-reduced-motion) h1[data-madar-reveal]:not(.madar-reveal
 html.madar-js:not(.madar-reduced-motion) h2[data-madar-reveal]:not(.madar-revealed),
 html.madar-js:not(.madar-reduced-motion) h3[data-madar-reveal]:not(.madar-revealed),
 html.madar-js:not(.madar-reduced-motion) .section-title[data-madar-reveal]:not(.madar-revealed) {
-  filter: blur(6px);
+  filter: blur(var(--madar-reveal-blur));
 }
 
 /* Cards & Images: scale from 0.98 to 1 */
 html.madar-js:not(.madar-reduced-motion) [data-madar-reveal="card"]:not(.madar-revealed),
 html.madar-js:not(.madar-reduced-motion) [data-madar-reveal="image"]:not(.madar-revealed),
 html.madar-js:not(.madar-reduced-motion) img[data-madar-reveal]:not(.madar-revealed) {
-  transform: translate3d(0, 24px, 0) scale(0.98);
+  transform: translate3d(0, var(--madar-reveal-distance), 0) scale(0.98);
 }
 
 /* Revealed State: triggered when entering ~85% viewport height */
@@ -4020,7 +4033,7 @@ html.madar-js .madar-revealed {
   transform: translate3d(0, 0, 0) scale(1);
   filter: blur(0);
   transition-property: opacity, transform, filter;
-  transition-duration: 0.9s;
+  transition-duration: var(--madar-reveal-duration);
   transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -4039,6 +4052,25 @@ html.madar-js [data-madar-delay="180"] { transition-delay: 180ms; }
 html.madar-js [data-madar-delay="270"] { transition-delay: 270ms; }
 html.madar-js [data-madar-delay="360"] { transition-delay: 360ms; }
 html.madar-js [data-madar-delay="450"] { transition-delay: 450ms; }
+
+@media (max-width: 768px) {
+  .living-ambient-glow {
+    animation: none;
+    filter: blur(64px);
+    will-change: auto;
+  }
+  .living-pattern-overlay,
+  .madar-orbit-pattern-bg {
+    animation: none;
+    will-change: auto;
+  }
+  .celestial-ring-outer { animation-duration: 72s; }
+  .celestial-ring-inner { animation-duration: 60s; }
+  .celestial-orbiting-body { animation-duration: 30s; }
+  .floating-hero-pill { animation-duration: 8s; }
+  .marquee-left,
+  .marquee-right { animation-duration: 52s; }
+}
 
 /* Strict prefers-reduced-motion: show everything immediately without animation */
 @media (prefers-reduced-motion: reduce) {

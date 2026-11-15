@@ -135,11 +135,14 @@
 
     let width = 0;
     let height = 0;
-    let dpr = Math.min(window.devicePixelRatio || 1, 2);
+    let isMobile = window.innerWidth <= 768;
+    let dpr = 1;
 
     function resize() {
       width = window.innerWidth;
       height = window.innerHeight;
+      isMobile = width <= 768;
+      dpr = Math.min(window.devicePixelRatio || 1, isMobile ? 1.25 : 2);
       canvas.width = Math.floor(width * dpr);
       canvas.height = Math.floor(height * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -302,7 +305,7 @@
 
     // Floating micro-embers (ذرات مدار الحية)
     const embers = [];
-    const emberCount = 36;
+    const emberCount = isMobile ? 14 : 36;
     for (let i = 0; i < emberCount; i++) {
       embers.push({
         x: Math.random() * (width || 1200),
@@ -316,18 +319,30 @@
     }
 
     let lastTime = performance.now();
-    let isVisible = true;
+    let lastMobileFrame = 0;
+    let isVisible = !document.hidden;
+    let animationFrameId = 0;
     document.addEventListener('visibilitychange', () => {
       isVisible = !document.hidden;
+      if (!isVisible) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = 0;
+      } else if (!prefersReducedMotion) {
+        lastTime = performance.now();
+        animationFrameId = requestAnimationFrame(render);
+      }
     });
 
     function render(now) {
-      if (!isVisible) {
-        requestAnimationFrame(render);
+      animationFrameId = 0;
+      if (!isVisible) return;
+      if (!prefersReducedMotion && isMobile && now - lastMobileFrame < 1000 / 30) {
+        animationFrameId = requestAnimationFrame(render);
         return;
       }
+      if (isMobile) lastMobileFrame = now;
 
-      const dt = Math.min((now - lastTime) / 1000, 0.1);
+      const dt = prefersReducedMotion ? 0 : Math.min((now - lastTime) / 1000, 0.1);
       lastTime = now;
 
       // Smooth mouse lerp
@@ -342,7 +357,8 @@
       const scrollOffset = (scrollY * 0.14) % height;
 
       // Compute actual star positions for this frame
-      const currentStarPositions = starHubs.map(hub => {
+      const visibleHubs = isMobile ? starHubs.slice(0, 5) : starHubs;
+      const currentStarPositions = visibleHubs.map(hub => {
         let y = hub.ny * height - scrollOffset;
         if (y < -hub.r * 2) y += height + hub.r * 4;
         if (y > height + hub.r * 2) y -= height + hub.r * 4;
@@ -407,7 +423,7 @@
         const distToMouse = Math.hypot(mouse.x - s.x, mouse.y - s.y);
         const mouseProximity = Math.max(0, 1 - distToMouse / 260);
 
-        const breathing = 1 + 0.05 * Math.sin(now * 0.0018 + s.phase);
+        const breathing = prefersReducedMotion ? 1 : 1 + 0.05 * Math.sin(now * 0.0018 + s.phase);
         const currentR = s.r * breathing * (1 + mouseProximity * 0.12);
 
         drawSaudiPatternHub(ctx, s.x, s.y, currentR, s.rot, s.points, isLight, mouseProximity);
@@ -425,7 +441,7 @@
           if (p.y > height) p.y = 0;
         }
 
-        const pulse = 0.85 + 0.3 * Math.sin(now * 0.0025 + p.pulseOffset);
+        const pulse = prefersReducedMotion ? 1 : 0.85 + 0.3 * Math.sin(now * 0.0025 + p.pulseOffset);
         const r = p.radius * pulse;
 
         // Subtle glow
@@ -441,10 +457,14 @@
         ctx.fill();
       });
 
-      requestAnimationFrame(render);
+      if (!prefersReducedMotion) animationFrameId = requestAnimationFrame(render);
     }
 
-    requestAnimationFrame(render);
+    if (prefersReducedMotion) {
+      render(performance.now());
+    } else {
+      animationFrameId = requestAnimationFrame(render);
+    }
   }
 
   // ==========================================================================
@@ -556,6 +576,7 @@
       const tl = gsap.timeline({
         onComplete: dismissPreloader
       });
+      tl.timeScale(window.innerWidth <= 768 ? 1.35 : 1);
 
       // 1. Ring draws itself with silky ease
       tl.to(ring, {
@@ -666,8 +687,17 @@
 
   // Hero Entrance Animations
   function triggerHeroAnimations() {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      document.querySelectorAll('.hero-title-word').forEach(el => {
+        el.style.opacity = '1';
+        el.style.transform = 'none';
+      });
+      return;
+    }
+
     if (typeof gsap !== 'undefined') {
       const tl = gsap.timeline();
+      tl.timeScale(window.innerWidth <= 768 ? 1.15 : 1);
       tl.to('.hero-title-word', {
         opacity: 1,
         y: 0,
@@ -714,6 +744,7 @@
   function initHeroOrbit() {
     const heroBall = document.getElementById('hero-orbit-ball');
     if (!heroBall || typeof gsap === 'undefined') return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 
     const cx = 483.6;
     const cy = 401.0;
@@ -727,7 +758,7 @@
     // Continuous smooth ambient rotation
     gsap.to(orbitState, {
       angle: a0 + 2 * Math.PI,
-      duration: 24,
+      duration: window.innerWidth <= 768 ? 36 : 24,
       repeat: -1,
       ease: 'none',
       onUpdate: () => {
@@ -1320,7 +1351,8 @@
     document.documentElement.classList.add('madar-js');
 
     // 3. Process Group Staggers (cards, list items, stats, testimonials)
-    // Up to 6 items per group with 90ms stagger
+    // Keep the stagger short on phones so grouped items do not feel delayed.
+    const staggerInterval = window.innerWidth <= 768 ? 50 : 90;
     const groups = document.querySelectorAll('[data-madar-reveal="group"], [data-madar-group]');
     groups.forEach(group => {
       const items = Array.from(group.children).filter(child => {
@@ -1339,7 +1371,7 @@
           item.setAttribute('data-madar-reveal', isCard ? 'card' : 'item');
         }
         if (!item.hasAttribute('data-madar-delay')) {
-          item.setAttribute('data-madar-delay', (index * 90).toString());
+          item.setAttribute('data-madar-delay', (index * staggerInterval).toString());
         }
       });
     });
