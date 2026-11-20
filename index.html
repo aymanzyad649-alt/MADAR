@@ -45,10 +45,17 @@
   <meta property="og:image" content="assets/logo-madar-full.png">
   <meta name="twitter:card" content="summary_large_image">
 
-  <!-- Google Fonts Preload -->
+  <!-- Google Fonts: only the weights actually used, loaded non-blocking (saves bandwidth + first paint) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Aref+Ruqaa:wght@400;700&family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=Inter:wght@400;500;600;700&family=Reem+Kufi:wght@500;600;700&display=swap" rel="stylesheet">
+  <link
+    rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Aref+Ruqaa:wght@400;700&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Reem+Kufi:wght@500;600;700&display=swap"
+    media="print"
+    onload="this.media='all'">
+  <noscript>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Aref+Ruqaa:wght@400;700&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Reem+Kufi:wght@500;600;700&display=swap">
+  </noscript>
 
   <!-- Favicon -->
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
@@ -114,7 +121,7 @@
         </svg>
 
         <!-- Wordmark image overlaid in front of the ring -->
-        <img id="preloader-wordmark" class="preloader-wordmark" src="assets/logo-madar-wordmark.png" alt="مدار MADAR">
+        <img id="preloader-wordmark" class="preloader-wordmark" src="assets/logo-madar-wordmark.webp" width="879" height="773" alt="مدار MADAR" decoding="async" fetchpriority="high">
       </div>
 
       <div class="preloader-caption-wrap" id="preloader-caption-wrap">
@@ -144,8 +151,8 @@
   <header id="site-header">
     <div class="container header-container">
       <a href="#hero" class="site-brand" aria-label="مدار - الصفحة الرئيسية">
-        <img src="assets/logo-madar-full-cropped.png" alt="مدار | MADAR" class="brand-logo-img logo-theme-dark">
-        <img src="assets/logo-madar-full-cropped-dark.png" alt="مدار | MADAR" class="brand-logo-img logo-theme-light">
+        <img src="assets/logo-madar-full-cropped.webp" width="692" height="518" alt="مدار | MADAR" class="brand-logo-img logo-theme-dark" decoding="async" fetchpriority="high">
+        <img src="assets/logo-madar-full-cropped-dark.webp" width="879" height="773" alt="مدار | MADAR" class="brand-logo-img logo-theme-light" decoding="async" loading="lazy" fetchpriority="low">
       </a>
 
       <!-- Navigation Links -->
@@ -316,8 +323,8 @@
 
             <!-- Central Core Madar Symbol (Dual Wordmarks for Dark / Light Modes) -->
             <div class="celestial-core-symbol">
-              <img src="assets/logo-madar-wordmark.png" alt="مدار" class="wordmark-theme-dark">
-              <img src="assets/logo-madar-wordmark-dark.png" alt="مدار" class="wordmark-theme-light">
+              <img src="assets/logo-madar-wordmark.webp" width="879" height="773" alt="مدار" class="wordmark-theme-dark" decoding="async">
+              <img src="assets/logo-madar-wordmark-dark.webp" width="879" height="773" alt="مدار" class="wordmark-theme-light" decoding="async" loading="lazy">
             </div>
 
             <!-- Rotating Orbiting Celestial Body (Bronze Ball) -->
@@ -1433,7 +1440,7 @@
         <!-- Brand Column -->
         <div class="footer-brand-col" data-madar-reveal data-madar-delay="0">
           <div class="site-brand">
-            <img src="assets/logo-madar-full-cropped.png" alt="مدار MADAR" class="brand-logo-img">
+            <img src="assets/logo-madar-full-cropped.webp" width="692" height="518" alt="مدار MADAR" class="brand-logo-img" loading="lazy" decoding="async">
           </div>
           <p class="footer-bio">
             شركة متخصصة في المونتاج وتصميم المواقع والجرافيك ديزاين، بهوية سعودية معاصرة ومستوى الشركات الكبرى. حيث تدور الفكرة حول عميلها.

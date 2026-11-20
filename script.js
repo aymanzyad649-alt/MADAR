@@ -52,15 +52,33 @@
 
   // --- Initialize Application ---
   document.addEventListener('DOMContentLoaded', async () => {
-    // 1. Fetch dynamic content if available over HTTP
+    // 1. Fetch dynamic content ONCE per browser session (cached => zero repeat requests / no re-downloads)
     try {
-      const [resContent, resTestimonials] = await Promise.all([
-        fetch('content.json').then(r => r.ok ? r.json() : null).catch(() => null),
-        fetch('testimonials.json').then(r => r.ok ? r.json() : null).catch(() => null)
-      ]);
-      if (resContent) appContent = Object.assign({}, DEFAULT_CONTENT, resContent);
-      if (resTestimonials && Array.isArray(resTestimonials) && resTestimonials.length > 0) {
-        appTestimonials = resTestimonials;
+      const cachedContent = readSessionCache('madar:content');
+      const cachedTestimonials = readSessionCache('madar:testimonials');
+
+      if (cachedContent) {
+        appContent = Object.assign({}, DEFAULT_CONTENT, cachedContent);
+      } else {
+        const resContent = await fetch('content.json')
+          .then(r => (r.ok ? r.json() : null))
+          .catch(() => null);
+        if (resContent) {
+          appContent = Object.assign({}, DEFAULT_CONTENT, resContent);
+          writeSessionCache('madar:content', resContent);
+        }
+      }
+
+      if (Array.isArray(cachedTestimonials)) {
+        if (cachedTestimonials.length > 0) appTestimonials = cachedTestimonials;
+      } else {
+        const resTestimonials = await fetch('testimonials.json')
+          .then(r => (r.ok ? r.json() : null))
+          .catch(() => null);
+        if (Array.isArray(resTestimonials)) {
+          if (resTestimonials.length > 0) appTestimonials = resTestimonials;
+          writeSessionCache('madar:testimonials', resTestimonials);
+        }
       }
     } catch (e) {
       console.log('Serving from embedded production configuration.');
@@ -86,8 +104,48 @@
     initCookiePDPL();
     initLanguageSwitcher();
     initModalHandlers();
+    initPauseWhenIdle();
     injectStructuredData();
   });
+
+  // --- Small helpers: session cache (prevents re-downloading JSON on every load) ---
+  function readSessionCache(key) {
+    try {
+      const raw = sessionStorage.getItem(key);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function writeSessionCache(key, value) {
+    try {
+      sessionStorage.setItem(key, JSON.stringify(value));
+    } catch (e) {}
+  }
+
+  // --- Shared scroll scheduler: one rAF-throttled listener instead of many ---
+  const scrollSubscribers = [];
+  let scrollTicking = false;
+  let lastScrollY = window.scrollY || 0;
+
+  function onScrollFrame(fn) {
+    scrollSubscribers.push(fn);
+    fn(lastScrollY);
+  }
+
+  function dispatchScroll() {
+    lastScrollY = window.scrollY || 0;
+    if (scrollTicking) return;
+    scrollTicking = true;
+    requestAnimationFrame(() => {
+      scrollTicking = false;
+      for (let i = 0; i < scrollSubscribers.length; i++) {
+        scrollSubscribers[i](lastScrollY);
+      }
+    });
+  }
+  window.addEventListener('scroll', dispatchScroll, { passive: true });
 
   // ==========================================================================
   // 1. Smooth Scrolling (Lenis + GSAP Integration - Jitter-Free)
@@ -96,13 +154,21 @@
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (prefersReducedMotion) return;
 
+    // Native scrolling is smoother & cheaper on touch devices and low-power machines.
+    const isTouch = window.matchMedia('(hover: none), (pointer: coarse)').matches;
+    const isLowPower = (navigator.hardwareConcurrency || 4) <= 4 ||
+                       (navigator.deviceMemory && navigator.deviceMemory <= 4);
+    if (isTouch || isLowPower) return;
+
     if (typeof Lenis !== 'undefined') {
       lenisInstance = new Lenis({
-        duration: 1.2,
+        duration: 1.1,
         easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
         orientation: 'vertical',
         smoothWheel: true,
-        wheelMultiplier: 0.95
+        wheelMultiplier: 0.95,
+        // Lenis' own rAF is enough; no need to piggyback on GSAP's ticker too.
+        syncTouch: false
       });
       window.__lenis = lenisInstance;
 
@@ -138,30 +204,47 @@
     let isMobile = window.innerWidth <= 768;
     let dpr = 1;
 
+    // --- Performance budgets (keeps CPU/GPU low without killing the look) ---
+    const TARGET_FPS = isMobile ? 24 : 30;          // 30fps is visually smooth for a soft background
+    const FRAME_BUDGET = 1000 / TARGET_FPS;
+
+    // Cache canvas gradients: creating them every frame is the #1 canvas CPU cost.
+    const gradientCache = new Map();
+    function cachedGradient(key, factory) {
+      let grad = gradientCache.get(key);
+      if (!grad) {
+        grad = factory();
+        gradientCache.set(key, grad);
+      }
+      return grad;
+    }
+
     function resize() {
       width = window.innerWidth;
       height = window.innerHeight;
       isMobile = width <= 768;
-      dpr = Math.min(window.devicePixelRatio || 1, isMobile ? 1.25 : 2);
+      // Cap the backing store: retina 2x on a full-screen canvas is very expensive.
+      dpr = Math.min(window.devicePixelRatio || 1, isMobile ? 1 : 1.35);
       canvas.width = Math.floor(width * dpr);
       canvas.height = Math.floor(height * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      gradientCache.clear();
     }
     resize();
     window.addEventListener('resize', resize, { passive: true });
 
-    // Interactive mouse tracking with smooth lerp
+    // Interactive mouse tracking with smooth lerp (idle when the pointer stops)
     const mouse = { x: width / 2, y: height / 2, targetX: width / 2, targetY: height / 2 };
+    let lastPointerMove = 0;
     window.addEventListener('mousemove', (e) => {
       mouse.targetX = e.clientX;
       mouse.targetY = e.clientY;
+      lastPointerMove = performance.now();
     }, { passive: true });
 
-    // Scroll parallax tracking
+    // Scroll parallax tracking (uses the shared rAF-throttled scroll listener)
     let scrollY = window.scrollY || 0;
-    window.addEventListener('scroll', () => {
-      scrollY = window.scrollY || 0;
-    }, { passive: true });
+    onScrollFrame((y) => { scrollY = y; });
 
     // Helper: Draw authentic Saudi Sadu Diamond & Najdi Shurafat Hub (المذخر وشرفات الدرعية)
     function drawSaudiPatternHub(ctx, cx, cy, outerR, rotation, points, isLight, glowAlpha = 0) {
@@ -171,14 +254,19 @@
 
       // 1. Subtle Radial Glow if illuminated or hovered
       if (glowAlpha > 0.05) {
-        const glowGrad = ctx.createRadialGradient(0, 0, outerR * 0.2, 0, 0, outerR * 1.8);
-        if (isLight) {
-          glowGrad.addColorStop(0, `rgba(150, 95, 49, ${glowAlpha * 0.22})`);
-          glowGrad.addColorStop(1, 'rgba(150, 95, 49, 0)');
-        } else {
-          glowGrad.addColorStop(0, `rgba(212, 154, 98, ${glowAlpha * 0.32})`);
-          glowGrad.addColorStop(1, 'rgba(212, 154, 98, 0)');
-        }
+        const glowKey = `glow|${isLight ? 1 : 0}|${Math.round(outerR / 4)}|${Math.round(glowAlpha * 10)}`;
+        const qGlow = Math.round(glowAlpha * 10) / 10;
+        const glowGrad = cachedGradient(glowKey, () => {
+          const g = ctx.createRadialGradient(0, 0, outerR * 0.2, 0, 0, outerR * 1.8);
+          if (isLight) {
+            g.addColorStop(0, `rgba(150, 95, 49, ${qGlow * 0.22})`);
+            g.addColorStop(1, 'rgba(150, 95, 49, 0)');
+          } else {
+            g.addColorStop(0, `rgba(212, 154, 98, ${qGlow * 0.32})`);
+            g.addColorStop(1, 'rgba(212, 154, 98, 0)');
+          }
+          return g;
+        });
         ctx.fillStyle = glowGrad;
         ctx.beginPath();
         ctx.arc(0, 0, outerR * 1.8, 0, Math.PI * 2);
@@ -271,16 +359,20 @@
 
       // 7. Center Luminous Amber/Gold Core
       const coreR = Math.max(outerR * 0.12, 2.8);
-      const coreGrad = ctx.createRadialGradient(-coreR * 0.3, -coreR * 0.3, 0, 0, 0, coreR);
-      if (isLight) {
-        coreGrad.addColorStop(0, '#FCFAF6');
-        coreGrad.addColorStop(0.5, '#965F31');
-        coreGrad.addColorStop(1, '#72451E');
-      } else {
-        coreGrad.addColorStop(0, '#F6DDB8');
-        coreGrad.addColorStop(0.45, '#D49A62');
-        coreGrad.addColorStop(1, '#8E5A31');
-      }
+      const coreKey = `core|${isLight ? 1 : 0}|${Math.round(coreR * 2)}`;
+      const coreGrad = cachedGradient(coreKey, () => {
+        const g = ctx.createRadialGradient(-coreR * 0.3, -coreR * 0.3, 0, 0, 0, coreR);
+        if (isLight) {
+          g.addColorStop(0, '#FCFAF6');
+          g.addColorStop(0.5, '#965F31');
+          g.addColorStop(1, '#72451E');
+        } else {
+          g.addColorStop(0, '#F6DDB8');
+          g.addColorStop(0.45, '#D49A62');
+          g.addColorStop(1, '#8E5A31');
+        }
+        return g;
+      });
       ctx.beginPath();
       ctx.arc(0, 0, coreR, 0, Math.PI * 2);
       ctx.fillStyle = coreGrad;
@@ -303,9 +395,9 @@
       { nx: 0.92, ny: 0.86, r: 40, speed: 0.00026, points: 8, rot: 1.5, phase: 2.9 }
     ];
 
-    // Floating micro-embers (ذرات مدار الحية)
+    // Floating micro-embers (ذرات مدار الحية) — fewer particles = far less GPU work
     const embers = [];
-    const emberCount = isMobile ? 14 : 36;
+    const emberCount = isMobile ? 8 : 18;
     for (let i = 0; i < emberCount; i++) {
       embers.push({
         x: Math.random() * (width || 1200),
@@ -319,7 +411,7 @@
     }
 
     let lastTime = performance.now();
-    let lastMobileFrame = 0;
+    let lastFrameTime = 0;
     let isVisible = !document.hidden;
     let animationFrameId = 0;
     document.addEventListener('visibilitychange', () => {
@@ -336,18 +428,26 @@
     function render(now) {
       animationFrameId = 0;
       if (!isVisible) return;
-      if (!prefersReducedMotion && isMobile && now - lastMobileFrame < 1000 / 30) {
+
+      // Hard frame cap (30fps desktop / 24fps mobile): halves the work of a 60fps loop
+      // and is imperceptible on a slow, soft background.
+      // Far from the hero the background is mostly covered, so drop to 15fps.
+      const budget = scrollY > height * 1.2 ? 1000 / 15 : FRAME_BUDGET;
+      if (!prefersReducedMotion && now - lastFrameTime < budget) {
         animationFrameId = requestAnimationFrame(render);
         return;
       }
-      if (isMobile) lastMobileFrame = now;
+      lastFrameTime = now;
 
       const dt = prefersReducedMotion ? 0 : Math.min((now - lastTime) / 1000, 0.1);
       lastTime = now;
 
-      // Smooth mouse lerp
-      mouse.x += (mouse.targetX - mouse.x) * 0.05;
-      mouse.y += (mouse.targetY - mouse.y) * 0.05;
+      // Smooth mouse lerp (skip entirely when the pointer has been idle for a while)
+      const pointerActive = now - lastPointerMove < 2500;
+      if (pointerActive || Math.abs(mouse.targetX - mouse.x) > 0.5 || Math.abs(mouse.targetY - mouse.y) > 0.5) {
+        mouse.x += (mouse.targetX - mouse.x) * 0.05;
+        mouse.y += (mouse.targetY - mouse.y) * 0.05;
+      }
 
       const isLight = document.documentElement.getAttribute('data-theme') === 'light';
 
@@ -356,78 +456,87 @@
       // Subtle scroll parallax
       const scrollOffset = (scrollY * 0.14) % height;
 
-      // Compute actual star positions for this frame
-      const visibleHubs = isMobile ? starHubs.slice(0, 5) : starHubs;
-      const currentStarPositions = visibleHubs.map(hub => {
+      // Compute actual star positions for this frame (reuse objects, no allocation per frame)
+      const hubCount = isMobile ? 4 : 6;
+      for (let i = 0; i < hubCount; i++) {
+        const hub = starHubs[i];
         let y = hub.ny * height - scrollOffset;
         if (y < -hub.r * 2) y += height + hub.r * 4;
         if (y > height + hub.r * 2) y -= height + hub.r * 4;
-        const x = hub.nx * width;
-        return { ...hub, x, y };
-      });
+        hub._x = hub.nx * width;
+        hub._y = y;
+      }
+      const currentStarPositions = starHubs;
+      const visibleCount = hubCount;
 
-      // 1. Draw Geometric Lattice Strapwork Lines between neighboring stars
-      ctx.save();
-      for (let i = 0; i < currentStarPositions.length; i++) {
-        for (let j = i + 1; j < currentStarPositions.length; j++) {
-          const s1 = currentStarPositions[i];
-          const s2 = currentStarPositions[j];
-          const dx = s2.x - s1.x;
-          const dy = s2.y - s1.y;
-          const dist = Math.hypot(dx, dy);
+      // 1. Draw Geometric Lattice Strapwork Lines between neighboring stars (desktop only)
+      if (!isMobile) {
+        ctx.save();
+        for (let i = 0; i < visibleCount; i++) {
+          for (let j = i + 1; j < visibleCount; j++) {
+            const s1 = currentStarPositions[i];
+            const s2 = currentStarPositions[j];
+            const dx = s2._x - s1._x;
+            const dy = s2._y - s1._y;
+            const dist = Math.hypot(dx, dy);
 
-          if (dist < width * 0.58) {
-            const alpha = Math.max(0, (1 - dist / (width * 0.58)) * (isLight ? 0.18 : 0.22));
-            ctx.beginPath();
-            ctx.moveTo(s1.x, s1.y);
-            ctx.lineTo(s2.x, s2.y);
-            ctx.strokeStyle = isLight ? `rgba(150, 95, 49, ${alpha})` : `rgba(212, 154, 98, ${alpha})`;
-            ctx.lineWidth = 0.9;
-            ctx.setLineDash([6, 8]);
-            ctx.stroke();
+            if (dist < width * 0.58) {
+              const alpha = Math.max(0, (1 - dist / (width * 0.58)) * (isLight ? 0.18 : 0.22));
+              ctx.beginPath();
+              ctx.moveTo(s1._x, s1._y);
+              ctx.lineTo(s2._x, s2._y);
+              ctx.strokeStyle = isLight ? `rgba(150, 95, 49, ${alpha})` : `rgba(212, 154, 98, ${alpha})`;
+              ctx.lineWidth = 0.9;
+              ctx.setLineDash([6, 8]);
+              ctx.stroke();
 
-            // Diamond midpoint accent (Najdi Shurafat / Sadu)
-            const mx = (s1.x + s2.x) * 0.5;
-            const my = (s1.y + s2.y) * 0.5;
-            ctx.setLineDash([]);
-            ctx.beginPath();
-            ctx.arc(mx, my, 2, 0, Math.PI * 2);
-            ctx.fillStyle = isLight ? `rgba(150, 95, 49, ${alpha * 1.5})` : `rgba(212, 154, 98, ${alpha * 1.5})`;
-            ctx.fill();
+              // Diamond midpoint accent (Najdi Shurafat / Sadu)
+              const mx = (s1._x + s2._x) * 0.5;
+              const my = (s1._y + s2._y) * 0.5;
+              ctx.setLineDash([]);
+              ctx.beginPath();
+              ctx.arc(mx, my, 2, 0, Math.PI * 2);
+              ctx.fillStyle = isLight ? `rgba(150, 95, 49, ${alpha * 1.5})` : `rgba(212, 154, 98, ${alpha * 1.5})`;
+              ctx.fill();
+            }
           }
         }
+        ctx.restore();
       }
-      ctx.restore();
 
-      // 2. Interactive Filaments toward Mouse
-      ctx.save();
-      currentStarPositions.forEach(s => {
-        const distToMouse = Math.hypot(mouse.x - s.x, mouse.y - s.y);
-        if (distToMouse < 240) {
-          const mouseAlpha = (1 - distToMouse / 240) * (isLight ? 0.35 : 0.45);
-          ctx.beginPath();
-          ctx.moveTo(s.x, s.y);
-          ctx.lineTo(mouse.x, mouse.y);
-          ctx.strokeStyle = isLight ? `rgba(150, 95, 49, ${mouseAlpha})` : `rgba(212, 154, 98, ${mouseAlpha})`;
-          ctx.lineWidth = 1.1;
-          ctx.stroke();
+      // 2. Interactive Filaments toward Mouse (only while the pointer is actually moving)
+      if (pointerActive) {
+        ctx.save();
+        for (let i = 0; i < visibleCount; i++) {
+          const s = currentStarPositions[i];
+          const distToMouse = Math.hypot(mouse.x - s._x, mouse.y - s._y);
+          if (distToMouse < 240) {
+            const mouseAlpha = (1 - distToMouse / 240) * (isLight ? 0.35 : 0.45);
+            ctx.beginPath();
+            ctx.moveTo(s._x, s._y);
+            ctx.lineTo(mouse.x, mouse.y);
+            ctx.strokeStyle = isLight ? `rgba(150, 95, 49, ${mouseAlpha})` : `rgba(212, 154, 98, ${mouseAlpha})`;
+            ctx.lineWidth = 1.1;
+            ctx.stroke();
+          }
         }
-      });
-      ctx.restore();
+        ctx.restore();
+      }
 
       // 3. Draw Islamic Star Hubs (with live rotation & breathing pulse)
-      currentStarPositions.forEach(s => {
+      for (let i = 0; i < visibleCount; i++) {
+        const s = currentStarPositions[i];
         if (!prefersReducedMotion) {
           s.rot += s.speed * 60 * dt;
         }
-        const distToMouse = Math.hypot(mouse.x - s.x, mouse.y - s.y);
+        const distToMouse = pointerActive ? Math.hypot(mouse.x - s._x, mouse.y - s._y) : 999;
         const mouseProximity = Math.max(0, 1 - distToMouse / 260);
 
         const breathing = prefersReducedMotion ? 1 : 1 + 0.05 * Math.sin(now * 0.0018 + s.phase);
         const currentR = s.r * breathing * (1 + mouseProximity * 0.12);
 
-        drawSaudiPatternHub(ctx, s.x, s.y, currentR, s.rot, s.points, isLight, mouseProximity);
-      });
+        drawSaudiPatternHub(ctx, s._x, s._y, currentR, s.rot, s.points, isLight, mouseProximity);
+      }
 
       // 4. Draw Floating Luminous Embers along Geometric Diagonals
       embers.forEach(p => {
@@ -513,6 +622,17 @@
 
     if (!preloader) return;
 
+    // Intro plays ONCE per browsing session — it will not re-play on every refresh/navigation.
+    let introPlayed = false;
+    try { introPlayed = sessionStorage.getItem('madar-intro-played') === '1'; } catch (e) {}
+    if (introPlayed) {
+      preloader.style.display = 'none';
+      preloader.classList.add('loaded');
+      triggerHeroAnimations();
+      return;
+    }
+    try { sessionStorage.setItem('madar-intro-played', '1'); } catch (e) {}
+
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (prefersReducedMotion) {
       preloader.style.display = 'none';
@@ -576,7 +696,8 @@
       const tl = gsap.timeline({
         onComplete: dismissPreloader
       });
-      tl.timeScale(window.innerWidth <= 768 ? 1.35 : 1);
+      // Slightly faster intro so the page becomes usable sooner (less waiting, less CPU burn)
+      tl.timeScale(window.innerWidth <= 768 ? 1.7 : 1.45);
 
       // 1. Ring draws itself with silky ease
       tl.to(ring, {
@@ -755,10 +876,10 @@
 
     const orbitState = { angle: a0 };
 
-    // Continuous smooth ambient rotation
-    gsap.to(orbitState, {
+    // Continuous smooth ambient rotation (paused automatically when the hero is off-screen)
+    const orbitTween = gsap.to(orbitState, {
       angle: a0 + 2 * Math.PI,
-      duration: window.innerWidth <= 768 ? 36 : 24,
+      duration: window.innerWidth <= 768 ? 60 : 40,
       repeat: -1,
       ease: 'none',
       onUpdate: () => {
@@ -767,6 +888,18 @@
         heroBall.setAttribute('transform', `translate(${currentX - initX}, ${currentY - initY})`);
       }
     });
+
+    // Only animate while the hero is actually visible => zero GPU work while scrolling the page.
+    const heroSection = document.getElementById('hero');
+    if (heroSection && 'IntersectionObserver' in window) {
+      const orbitObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) orbitTween.play();
+          else orbitTween.pause();
+        });
+      }, { threshold: 0 });
+      orbitObserver.observe(heroSection);
+    }
 
     // Acceleration on scroll
     if (typeof ScrollTrigger !== 'undefined') {
@@ -789,13 +922,16 @@
     const mobileToggle = document.getElementById('mobile-menu-toggle');
     const navLinks = document.querySelector('.nav-links');
 
-    window.addEventListener('scroll', () => {
-      if (window.scrollY > 40) {
-        header.classList.add('scrolled');
-      } else {
-        header.classList.remove('scrolled');
+    // Single shared, rAF-throttled scroll listener (no layout thrashing)
+    let isScrolled = window.scrollY > 40;
+    header.classList.toggle('scrolled', isScrolled);
+    onScrollFrame((y) => {
+      const next = y > 40;
+      if (next !== isScrolled) {
+        isScrolled = next;
+        header.classList.toggle('scrolled', next);
       }
-    }, { passive: true });
+    });
 
     if (mobileToggle && navLinks) {
       mobileToggle.addEventListener('click', () => {
@@ -822,13 +958,17 @@
     const orbitDot = document.querySelector('.progress-orbit-dot');
     if (!barFill || !orbitDot) return;
 
-    window.addEventListener('scroll', () => {
-      const scrollY = window.scrollY;
+    let lastProgress = -1;
+    onScrollFrame((scrollY) => {
       const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
       const progress = maxScroll > 0 ? Math.min(100, Math.max(0, (scrollY / maxScroll) * 100)) : 0;
-      barFill.style.height = `${progress}%`;
-      orbitDot.style.top = `${progress}%`;
-    }, { passive: true });
+      // Only touch the DOM when the value actually changed (avoids constant style writes)
+      const rounded = Math.round(progress * 10) / 10;
+      if (rounded === lastProgress) return;
+      lastProgress = rounded;
+      barFill.style.height = `${rounded}%`;
+      orbitDot.style.top = `${rounded}%`;
+    });
   }
 
   // ==========================================================================
@@ -1428,7 +1568,7 @@
               el.classList.add('madar-settled');
               el.style.opacity = '1';
               el.style.filter = 'none';
-            }, 900 + delay + 40);
+            }, 600 + delay);
 
             el.addEventListener('transitionend', function onEnd(e) {
               if (e.propertyName === 'opacity' || e.propertyName === 'transform') {
@@ -1454,6 +1594,30 @@
     } else {
       revealElements.forEach(el => el.classList.add('madar-revealed', 'madar-settled'));
     }
+  }
+
+  // ==========================================================================
+  // 15-c. Pause decorative animations when hidden / off-screen (CPU & GPU saver)
+  // ==========================================================================
+  function initPauseWhenIdle() {
+    const root = document.documentElement;
+
+    const syncVisibility = () => root.classList.toggle('tab-hidden', document.hidden);
+    document.addEventListener('visibilitychange', syncVisibility);
+    syncVisibility();
+
+    if (!('IntersectionObserver' in window)) return;
+
+    const heavySections = document.querySelectorAll('#hero, #journey, #portfolio, #process, #testimonials');
+    if (!heavySections.length) return;
+
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        entry.target.classList.toggle('anim-paused', !entry.isIntersecting);
+      });
+    }, { rootMargin: '150px 0px' });
+
+    heavySections.forEach(section => observer.observe(section));
   }
 
   // ==========================================================================
