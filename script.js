@@ -16,6 +16,15 @@
 (function () {
   'use strict';
 
+  // --- Device capability detection (runs before paint so CSS can react immediately) ---
+  const isLowPowerDevice =
+    (navigator.hardwareConcurrency || 4) <= 4 ||
+    (navigator.deviceMemory && navigator.deviceMemory <= 4) ||
+    window.matchMedia('(update: slow)').matches;
+  if (isLowPowerDevice) {
+    document.documentElement.classList.add('madar-lite');
+  }
+
   // --- Unified Production Defaults (Strictly per Brief v2) ---
   const DEFAULT_CONTENT = {
     brand: {
@@ -104,7 +113,6 @@
     initCookiePDPL();
     initLanguageSwitcher();
     initModalHandlers();
-    initPauseWhenIdle();
     injectStructuredData();
   });
 
@@ -151,41 +159,10 @@
   // 1. Smooth Scrolling (Lenis + GSAP Integration - Jitter-Free)
   // ==========================================================================
   function initSmoothScroll() {
-    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (prefersReducedMotion) return;
-
-    // Native scrolling is smoother & cheaper on touch devices and low-power machines.
-    const isTouch = window.matchMedia('(hover: none), (pointer: coarse)').matches;
-    const isLowPower = (navigator.hardwareConcurrency || 4) <= 4 ||
-                       (navigator.deviceMemory && navigator.deviceMemory <= 4);
-    if (isTouch || isLowPower) return;
-
-    if (typeof Lenis !== 'undefined') {
-      lenisInstance = new Lenis({
-        duration: 1.1,
-        easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
-        orientation: 'vertical',
-        smoothWheel: true,
-        wheelMultiplier: 0.95,
-        // Lenis' own rAF is enough; no need to piggyback on GSAP's ticker too.
-        syncTouch: false
-      });
-      window.__lenis = lenisInstance;
-
-      if (typeof ScrollTrigger !== 'undefined' && typeof gsap !== 'undefined') {
-        lenisInstance.on('scroll', ScrollTrigger.update);
-        gsap.ticker.add((time) => {
-          lenisInstance.raf(time * 1000);
-        });
-        gsap.ticker.lagSmoothing(0);
-      } else {
-        function raf(time) {
-          lenisInstance.raf(time);
-          requestAnimationFrame(raf);
-        }
-        requestAnimationFrame(raf);
-      }
-    }
+    // Intentionally disabled: Lenis keeps a permanent requestAnimationFrame loop and
+    // writes the scroll position every frame, which is the #1 cause of jank/GPU load
+    // on laptops. Native scrolling is used instead; all callers already fall back.
+    lenisInstance = null;
   }
 
   // ==========================================================================
@@ -205,8 +182,13 @@
     let dpr = 1;
 
     // --- Performance budgets (keeps CPU/GPU low without killing the look) ---
-    const TARGET_FPS = isMobile ? 24 : 30;          // 30fps is visually smooth for a soft background
+    const TARGET_FPS = isMobile ? 4 : 6;             // background canvas: 6fps max is plenty
     const FRAME_BUDGET = 1000 / TARGET_FPS;
+    const STATIC_BACKGROUND = true;                   // draw ONE frame then stop — no rAF loop
+
+    let isFrozen = false;
+    let animationFrameId = 0;
+    let lastFrameTime = 0;
 
     // Cache canvas gradients: creating them every frame is the #1 canvas CPU cost.
     const gradientCache = new Map();
@@ -223,8 +205,8 @@
       width = window.innerWidth;
       height = window.innerHeight;
       isMobile = width <= 768;
-      // Cap the backing store: retina 2x on a full-screen canvas is very expensive.
-      dpr = Math.min(window.devicePixelRatio || 1, isMobile ? 1 : 1.35);
+      // Cap the backing store: a full-screen 2D canvas at retina resolution is very expensive.
+      dpr = 1;
       canvas.width = Math.floor(width * dpr);
       canvas.height = Math.floor(height * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -244,7 +226,15 @@
 
     // Scroll parallax tracking (uses the shared rAF-throttled scroll listener)
     let scrollY = window.scrollY || 0;
-    onScrollFrame((y) => { scrollY = y; });
+    onScrollFrame((y) => {
+      scrollY = y;
+      // Resume the background only while the hero is on screen
+      if (isFrozen && !STATIC_BACKGROUND && y <= height * 1.1) {
+        isFrozen = false;
+        lastFrameTime = performance.now();
+        if (!animationFrameId) animationFrameId = requestAnimationFrame(render);
+      }
+    });
 
     // Helper: Draw authentic Saudi Sadu Diamond & Najdi Shurafat Hub (المذخر وشرفات الدرعية)
     function drawSaudiPatternHub(ctx, cx, cy, outerR, rotation, points, isLight, glowAlpha = 0) {
@@ -397,7 +387,7 @@
 
     // Floating micro-embers (ذرات مدار الحية) — fewer particles = far less GPU work
     const embers = [];
-    const emberCount = isMobile ? 8 : 18;
+    const emberCount = isMobile ? 4 : 10;
     for (let i = 0; i < emberCount; i++) {
       embers.push({
         x: Math.random() * (width || 1200),
@@ -411,9 +401,7 @@
     }
 
     let lastTime = performance.now();
-    let lastFrameTime = 0;
     let isVisible = !document.hidden;
-    let animationFrameId = 0;
     document.addEventListener('visibilitychange', () => {
       isVisible = !document.hidden;
       if (!isVisible) {
@@ -429,11 +417,14 @@
       animationFrameId = 0;
       if (!isVisible) return;
 
-      // Hard frame cap (30fps desktop / 24fps mobile): halves the work of a 60fps loop
-      // and is imperceptible on a slow, soft background.
-      // Far from the hero the background is mostly covered, so drop to 15fps.
-      const budget = scrollY > height * 1.2 ? 1000 / 15 : FRAME_BUDGET;
-      if (!prefersReducedMotion && now - lastFrameTime < budget) {
+      // Below the hero the background is almost completely covered => stop drawing entirely.
+      // (This is what used to eat the GPU while scrolling down the page.)
+      if (!STATIC_BACKGROUND && scrollY > height * 1.1) {
+        isFrozen = true;
+        return;
+      }
+
+      if (!prefersReducedMotion && now - lastFrameTime < FRAME_BUDGET) {
         animationFrameId = requestAnimationFrame(render);
         return;
       }
@@ -457,7 +448,7 @@
       const scrollOffset = (scrollY * 0.14) % height;
 
       // Compute actual star positions for this frame (reuse objects, no allocation per frame)
-      const hubCount = isMobile ? 4 : 6;
+      const hubCount = isMobile ? 3 : 4;
       for (let i = 0; i < hubCount; i++) {
         const hub = starHubs[i];
         let y = hub.ny * height - scrollOffset;
@@ -469,59 +460,9 @@
       const currentStarPositions = starHubs;
       const visibleCount = hubCount;
 
-      // 1. Draw Geometric Lattice Strapwork Lines between neighboring stars (desktop only)
-      if (!isMobile) {
-        ctx.save();
-        for (let i = 0; i < visibleCount; i++) {
-          for (let j = i + 1; j < visibleCount; j++) {
-            const s1 = currentStarPositions[i];
-            const s2 = currentStarPositions[j];
-            const dx = s2._x - s1._x;
-            const dy = s2._y - s1._y;
-            const dist = Math.hypot(dx, dy);
+      // 1. Geometric Lattice Lines — DISABLED (O(n²) path draws were the biggest canvas cost)
 
-            if (dist < width * 0.58) {
-              const alpha = Math.max(0, (1 - dist / (width * 0.58)) * (isLight ? 0.18 : 0.22));
-              ctx.beginPath();
-              ctx.moveTo(s1._x, s1._y);
-              ctx.lineTo(s2._x, s2._y);
-              ctx.strokeStyle = isLight ? `rgba(150, 95, 49, ${alpha})` : `rgba(212, 154, 98, ${alpha})`;
-              ctx.lineWidth = 0.9;
-              ctx.setLineDash([6, 8]);
-              ctx.stroke();
-
-              // Diamond midpoint accent (Najdi Shurafat / Sadu)
-              const mx = (s1._x + s2._x) * 0.5;
-              const my = (s1._y + s2._y) * 0.5;
-              ctx.setLineDash([]);
-              ctx.beginPath();
-              ctx.arc(mx, my, 2, 0, Math.PI * 2);
-              ctx.fillStyle = isLight ? `rgba(150, 95, 49, ${alpha * 1.5})` : `rgba(212, 154, 98, ${alpha * 1.5})`;
-              ctx.fill();
-            }
-          }
-        }
-        ctx.restore();
-      }
-
-      // 2. Interactive Filaments toward Mouse (only while the pointer is actually moving)
-      if (pointerActive) {
-        ctx.save();
-        for (let i = 0; i < visibleCount; i++) {
-          const s = currentStarPositions[i];
-          const distToMouse = Math.hypot(mouse.x - s._x, mouse.y - s._y);
-          if (distToMouse < 240) {
-            const mouseAlpha = (1 - distToMouse / 240) * (isLight ? 0.35 : 0.45);
-            ctx.beginPath();
-            ctx.moveTo(s._x, s._y);
-            ctx.lineTo(mouse.x, mouse.y);
-            ctx.strokeStyle = isLight ? `rgba(150, 95, 49, ${mouseAlpha})` : `rgba(212, 154, 98, ${mouseAlpha})`;
-            ctx.lineWidth = 1.1;
-            ctx.stroke();
-          }
-        }
-        ctx.restore();
-      }
+      // 2. Interactive Mouse Filaments — DISABLED (saves ctx.save/restore + lineTo per hub per frame)
 
       // 3. Draw Islamic Star Hubs (with live rotation & breathing pulse)
       for (let i = 0; i < visibleCount; i++) {
@@ -566,14 +507,19 @@
         ctx.fill();
       });
 
-      if (!prefersReducedMotion) animationFrameId = requestAnimationFrame(render);
+      if (!prefersReducedMotion && !STATIC_BACKGROUND) animationFrameId = requestAnimationFrame(render);
     }
 
-    if (prefersReducedMotion) {
+    if (prefersReducedMotion || STATIC_BACKGROUND) {
       render(performance.now());
     } else {
       animationFrameId = requestAnimationFrame(render);
     }
+
+    // Redraw once after a theme switch when the loop is not running.
+    window.__madarRedrawBg = () => {
+      if (isVisible && STATIC_BACKGROUND) render(performance.now());
+    };
   }
 
   // ==========================================================================
@@ -595,6 +541,9 @@
       setTimeout(() => {
         document.documentElement.classList.remove('theme-transitioning');
       }, 420);
+      if (typeof window.__madarRedrawBg === 'function') {
+        setTimeout(window.__madarRedrawBg, 80);
+      }
     }
 
     toggleBtn.addEventListener('click', () => {
@@ -876,10 +825,10 @@
 
     const orbitState = { angle: a0 };
 
-    // Continuous smooth ambient rotation (paused automatically when the hero is off-screen)
+    // Continuous smooth ambient rotation — slower = less CPU; paused when hero is off-screen.
     const orbitTween = gsap.to(orbitState, {
       angle: a0 + 2 * Math.PI,
-      duration: window.innerWidth <= 768 ? 60 : 40,
+      duration: window.innerWidth <= 768 ? 90 : 60,
       repeat: -1,
       ease: 'none',
       onUpdate: () => {
@@ -899,18 +848,6 @@
         });
       }, { threshold: 0 });
       orbitObserver.observe(heroSection);
-    }
-
-    // Acceleration on scroll
-    if (typeof ScrollTrigger !== 'undefined') {
-      ScrollTrigger.create({
-        trigger: '#hero',
-        start: 'top top',
-        end: 'bottom top',
-        onUpdate: (self) => {
-          orbitState.angle += self.getVelocity() * 0.0001;
-        }
-      });
     }
   }
 
@@ -958,11 +895,24 @@
     const orbitDot = document.querySelector('.progress-orbit-dot');
     if (!barFill || !orbitDot) return;
 
+    // Cache the document height: reading scrollHeight on every scroll tick forced
+    // a full layout recalculation and made the page stutter while scrolling.
+    let maxScroll = 1;
     let lastProgress = -1;
+
+    const measure = () => {
+      maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+    };
+    measure();
+    window.addEventListener('resize', measure, { passive: true });
+    window.addEventListener('load', measure, { once: true });
+    if ('ResizeObserver' in window) {
+      const ro = new ResizeObserver(measure);
+      ro.observe(document.body);
+    }
+
     onScrollFrame((scrollY) => {
-      const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
-      const progress = maxScroll > 0 ? Math.min(100, Math.max(0, (scrollY / maxScroll) * 100)) : 0;
-      // Only touch the DOM when the value actually changed (avoids constant style writes)
+      const progress = Math.min(100, Math.max(0, (scrollY / maxScroll) * 100));
       const rounded = Math.round(progress * 10) / 10;
       if (rounded === lastProgress) return;
       lastProgress = rounded;
@@ -1064,32 +1014,47 @@
   function initOrbitTimeline() {
     const journeySection = document.getElementById('journey');
     const dot = document.querySelector('.journey-traveling-dot');
-    const nodes = document.querySelectorAll('.timeline-node');
+    const nodes = Array.from(document.querySelectorAll('.timeline-node'));
     if (!journeySection || !dot || !nodes.length) return;
 
-    if (typeof ScrollTrigger !== 'undefined' && typeof gsap !== 'undefined') {
-      ScrollTrigger.create({
-        trigger: journeySection,
-        start: 'top 70%',
-        end: 'bottom 40%',
-        onUpdate: (self) => {
-          const progress = self.progress;
-          const containerHeight = journeySection.querySelector('.journey-wrapper').offsetHeight;
-          dot.style.top = `${progress * containerHeight}px`;
+    const wrapper = journeySection.querySelector('.journey-wrapper');
 
-          nodes.forEach((node, i) => {
-            const threshold = (i + 0.3) / nodes.length;
-            if (progress >= threshold) {
-              node.classList.add('active');
-            } else {
-              node.classList.remove('active');
-            }
-          });
+    // Measure once (and on resize) instead of reading layout on every scroll tick.
+    let sectionTop = 0;
+    let sectionHeight = 0;
+    let containerHeight = 0;
+    const measure = () => {
+      const rect = journeySection.getBoundingClientRect();
+      sectionTop = rect.top + (window.scrollY || 0);
+      sectionHeight = rect.height;
+      containerHeight = wrapper ? wrapper.offsetHeight : 0;
+    };
+    measure();
+    window.addEventListener('resize', measure, { passive: true });
+    window.addEventListener('load', measure, { once: true });
+
+    const activeState = new Array(nodes.length).fill(false);
+    let lastTop = -1;
+
+    onScrollFrame((scrollY) => {
+      const start = sectionTop - window.innerHeight * 0.7;
+      const end = sectionTop + sectionHeight - window.innerHeight * 0.4;
+      const progress = Math.min(1, Math.max(0, (scrollY - start) / Math.max(1, end - start)));
+
+      const top = progress * containerHeight;
+      if (Math.abs(top - lastTop) > 0.5) {
+        lastTop = top;
+        dot.style.top = `${top}px`;
+      }
+
+      for (let i = 0; i < nodes.length; i++) {
+        const on = progress >= (i + 0.3) / nodes.length;
+        if (on !== activeState[i]) {
+          activeState[i] = on;
+          nodes[i].classList.toggle('active', on);
         }
-      });
-    } else {
-      nodes.forEach(node => node.classList.add('active'));
-    }
+      }
+    });
   }
 
   // ==========================================================================
@@ -1098,26 +1063,42 @@
   function initProcessLine() {
     const processSection = document.getElementById('process');
     const lineActive = document.querySelector('.process-line-active');
-    const steps = document.querySelectorAll('.process-step-card');
-    if (!processSection || !lineActive) return;
+    const steps = Array.from(document.querySelectorAll('.process-step-card'));
+    if (!processSection || !lineActive || !steps.length) return;
 
-    if (typeof ScrollTrigger !== 'undefined') {
-      ScrollTrigger.create({
-        trigger: processSection,
-        start: 'top 65%',
-        end: 'bottom 60%',
-        onUpdate: (self) => {
-          lineActive.style.width = `${self.progress * 100}%`;
-          steps.forEach((step, i) => {
-            if (self.progress >= (i / (steps.length - 1))) {
-              step.classList.add('active');
-            } else {
-              step.classList.remove('active');
-            }
-          });
+    let sectionTop = 0;
+    let sectionHeight = 0;
+    const measure = () => {
+      const rect = processSection.getBoundingClientRect();
+      sectionTop = rect.top + (window.scrollY || 0);
+      sectionHeight = rect.height;
+    };
+    measure();
+    window.addEventListener('resize', measure, { passive: true });
+    window.addEventListener('load', measure, { once: true });
+
+    const activeState = new Array(steps.length).fill(false);
+    let lastWidth = -1;
+
+    onScrollFrame((scrollY) => {
+      const start = sectionTop - window.innerHeight * 0.65;
+      const end = sectionTop + sectionHeight - window.innerHeight * 0.6;
+      const progress = Math.min(1, Math.max(0, (scrollY - start) / Math.max(1, end - start)));
+
+      const width = Math.round(progress * 1000) / 10;
+      if (width !== lastWidth) {
+        lastWidth = width;
+        lineActive.style.width = `${width}%`;
+      }
+
+      for (let i = 0; i < steps.length; i++) {
+        const on = progress >= i / Math.max(1, steps.length - 1);
+        if (on !== activeState[i]) {
+          activeState[i] = on;
+          steps[i].classList.toggle('active', on);
         }
-      });
-    }
+      }
+    });
   }
 
   // ==========================================================================
@@ -1492,7 +1473,7 @@
 
     // 3. Process Group Staggers (cards, list items, stats, testimonials)
     // Keep the stagger short on phones so grouped items do not feel delayed.
-    const staggerInterval = window.innerWidth <= 768 ? 50 : 90;
+    const staggerInterval = window.innerWidth <= 768 ? 30 : 60;
     const groups = document.querySelectorAll('[data-madar-reveal="group"], [data-madar-group]');
     groups.forEach(group => {
       const items = Array.from(group.children).filter(child => {
@@ -1594,30 +1575,6 @@
     } else {
       revealElements.forEach(el => el.classList.add('madar-revealed', 'madar-settled'));
     }
-  }
-
-  // ==========================================================================
-  // 15-c. Pause decorative animations when hidden / off-screen (CPU & GPU saver)
-  // ==========================================================================
-  function initPauseWhenIdle() {
-    const root = document.documentElement;
-
-    const syncVisibility = () => root.classList.toggle('tab-hidden', document.hidden);
-    document.addEventListener('visibilitychange', syncVisibility);
-    syncVisibility();
-
-    if (!('IntersectionObserver' in window)) return;
-
-    const heavySections = document.querySelectorAll('#hero, #journey, #portfolio, #process, #testimonials');
-    if (!heavySections.length) return;
-
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        entry.target.classList.toggle('anim-paused', !entry.isIntersecting);
-      });
-    }, { rootMargin: '150px 0px' });
-
-    heavySections.forEach(section => observer.observe(section));
   }
 
   // ==========================================================================

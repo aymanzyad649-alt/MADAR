@@ -201,12 +201,21 @@ html[data-theme="light"] {
   --shadow-bronze: 0 8px 25px rgba(142, 90, 49, 0.15);
 }
 
-/* Smooth Transition across theme toggle (400ms per Brief v3 Section 1) */
+/* Smooth Transition across theme toggle — scoped to key elements only (the `*` selector was
+   forcing the browser to recalculate transitions on every DOM node) */
 html.theme-transitioning,
-html.theme-transitioning *,
-html.theme-transitioning *::before,
-html.theme-transitioning *::after {
-  transition: background-color 400ms ease, color 400ms ease, border-color 400ms ease, box-shadow 400ms ease, fill 400ms ease, stroke 400ms ease !important;
+html.theme-transitioning body,
+html.theme-transitioning #site-header,
+html.theme-transitioning section,
+html.theme-transitioning footer,
+html.theme-transitioning .service-card,
+html.theme-transitioning .portfolio-card,
+html.theme-transitioning .feature-strip-card,
+html.theme-transitioning .faq-item,
+html.theme-transitioning .process-step-card,
+html.theme-transitioning .commitments-strip-card,
+html.theme-transitioning .booking-form {
+  transition: background-color 400ms ease, color 400ms ease, border-color 400ms ease !important;
 }
 
 /* Base & Reset */
@@ -276,7 +285,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   z-index: 5;
 }
 
-.section-padding { padding-block: 6rem; }
+.section-padding { padding-block: 6rem; contain: content; }
 
 .section-header {
   text-align: center;
@@ -3977,16 +3986,16 @@ html[data-theme="light"] .najdi-triangles-divider.to-dark {
    Prefix all new CSS classes with 'madar-'
    ========================================================================== */
 :root {
-  --madar-reveal-duration: 0.72s;
-  --madar-reveal-distance: 20px;
-  --madar-reveal-blur: 5px;
+  --madar-reveal-duration: 0.5s;
+  --madar-reveal-distance: 14px;
+  --madar-reveal-blur: 0px;
 }
 
 @media (max-width: 768px) {
   :root {
-    --madar-reveal-duration: 0.58s;
-    --madar-reveal-distance: 12px;
-    --madar-reveal-blur: 3px;
+    --madar-reveal-duration: 0.4s;
+    --madar-reveal-distance: 8px;
+    --madar-reveal-blur: 0px;
   }
 }
 
@@ -4085,21 +4094,29 @@ html.madar-js [data-madar-delay="450"] { transition-delay: 450ms; }
 }
 
 /* ==========================================================================
-   PERFORMANCE LAYER (v2.1)
-   هدفها: تقليل استهلاك المعالج والكرت (CPU/GPU) وإيقاف إعادة الرسم المستمر
-   بدون تغيير الهوية البصرية.
+   PERFORMANCE LAYER (v2.2) — وضع خفيف جدًا
+   الهدف: تصفير تقريبًا استهلاك الـ GPU من الحركات، ومنع أي إعادة رسم مستمرة،
+   ومنع تعليق الصفحة وقت التمرير. الهوية البصرية (الألوان والزخارف) كما هي،
+   بس بدون حركة لانهائية.
    ========================================================================== */
 
-/* 1) الخلفية الزخرفية: ثابتة (بدون إعادة رسم كامل الشاشة 60 مرة في الثانية) */
-.living-pattern-overlay,
-.madar-orbit-pattern-bg {
+/* 1) إيقاف كل حركات CSS اللانهائية في الموقع بالكامل (الانتقالات hover/الظهور شغالة) */
+html body *,
+html body *::before,
+html body *::after {
   animation: none !important;
-  will-change: auto !important;
-  transform: none !important;
 }
 
-/* 2) إلغاء الـ blur خلف الأقسام: كان يستهلك GPU ضخم مقابل فرق بصري شبه معدوم
-      (الخلفية أصلًا معتمة بنسبة ~82%) */
+/* الاستثناء الوحيد: مؤشر التحميل في نموذج الحجز (يظهر لثانية واحدة) */
+.btn-booking-submit svg {
+  animation: madarSpin 0.9s linear infinite !important;
+}
+@keyframes madarSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* 2) إلغاء الـ blur خلف الأقسام والهيدر والكروت
+      (كان يستهلك GPU ضخم مقابل فرق بصري شبه معدوم) */
 #hero,
 #trust-bar,
 #services,
@@ -4117,40 +4134,62 @@ html.madar-js [data-madar-delay="450"] { transition-delay: 450ms; }
 .floating-hero-pill,
 .faq-item,
 .contact-card,
-.service-card {
+.service-card,
+.modal-panel,
+#cookie-banner {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
 
-/* الهيدر ثابت وفوق المحتوى المتحرك: إزالة الـ blur تمنع إعادة حسابه كل إطار */
+/* الهيدر ثابت فوق المحتوى: بدون blur عشان مايتحسبش كل إطار */
 #site-header {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
-  background: rgba(11, 15, 14, 0.96);
+  background: rgba(11, 15, 14, 0.97);
 }
 html[data-theme="light"] #site-header {
   background: rgba(247, 243, 235, 0.98);
 }
 
-/* 3) توهجات الخلفية: نصف قطر blur أقل = رَسترة أرخص بكثير */
+/* 3) توهجات الخلفية: بدون فلتر blur تمامًا (الـ radial-gradient نفسه ناعم) */
 .living-ambient-glow {
-  filter: blur(64px);
+  filter: none !important;
+  opacity: 0.45;
 }
 
-/* 4) إيقاف كل الحركات الزخرفية عند إخفاء التبويب أو خروج القسم من الشاشة */
+/* 4) طبقة واحدة مركّبة للخلفية: السكرول مايعيدش رسمها */
+.madar-living-bg {
+  transform: translateZ(0);
+  will-change: transform;
+  contain: paint;
+}
+
+/* 5) الزخارف الثابتة: بدون أي طبقات إضافية */
+.living-pattern-overlay,
+.madar-orbit-pattern-bg,
+.orbit-sphere,
+.celestial-ring-outer,
+.celestial-ring-inner,
+.celestial-orbiting-body,
+.floating-hero-pill {
+  animation: none !important;
+  will-change: auto !important;
+}
+.living-pattern-overlay,
+.madar-orbit-pattern-bg {
+  transform: none !important;
+}
+
+/* 6) إيقاف أي حركة عند إخفاء التبويب (احتياطي) */
 html.tab-hidden *,
 html.tab-hidden *::before,
-html.tab-hidden *::after,
-.anim-paused,
-.anim-paused *,
-.anim-paused *::before,
-.anim-paused *::after {
+html.tab-hidden *::after {
   animation-play-state: paused !important;
 }
 
-/* 5) نظام الظهور عند التمرير: بدون blur (كان يخلق طبقة filter لكل كارت) */
+/* 7) نظام الظهور عند التمرير: بدون blur (كان يخلق طبقة filter لكل كارت) */
 :root {
-  --madar-reveal-duration: 0.55s;
+  --madar-reveal-duration: 0.4s;
   --madar-reveal-blur: 0px;
 }
 html.madar-js:not(.madar-reduced-motion) [data-madar-reveal]:not([data-madar-reveal="group"]):not(.madar-revealed) {
@@ -4163,35 +4202,49 @@ html.madar-js [data-madar-reveal].madar-revealed {
   transition-property: opacity, transform;
 }
 
-/* 6) الموبايل: تقليل العناصر المتحركة والحركات الثقيلة */
+/* 8) الموبايل: أخف كمان */
 @media (max-width: 768px) {
-  .orbit-sphere:nth-child(n+7) {
+  .orbit-sphere:nth-child(n+3) {
     display: none;
   }
   .living-ambient-glow {
-    filter: blur(44px);
+    display: none;
   }
-  .celestial-ring-outer { animation-duration: 100s; }
-  .celestial-ring-inner { animation-duration: 80s; }
-  .celestial-orbiting-body { animation-duration: 40s; }
-  .floating-hero-pill { animation-duration: 9s; }
-  .marquee-left,
-  .marquee-right { animation-duration: 70s; }
-  .wave-bar { animation-duration: 1.8s; }
-  .timeline-playhead { animation-duration: 7s; }
-  .k-w1, .k-w2, .k-w3, .k-w4 { animation-duration: 5s; }
 }
 
-/* 7) شاشات بطيئة/قديمة: خلفية ثابتة تمامًا وحركات مقتصدة */
-@media (prefers-reduced-motion: reduce) {
-  .living-ambient-glow,
-  .celestial-ring-outer,
-  .celestial-ring-inner,
-  .celestial-orbiting-body,
-  .floating-hero-pill,
-  .marquee-left,
-  .marquee-right {
-    animation: none !important;
-  }
+/* Hide excess orbit spheres on desktop too — 6 is enough */
+.orbit-sphere:nth-child(n+7) {
+  display: none;
+}
+
+/* 9) أجهزة ضعيفة (أقل من 4 أنوية أو ذاكرة 4GB): شيل الزخارف المتحركة نهائيًا */
+html.madar-lite .living-ambient-glow,
+html.madar-lite .orbit-sphere,
+html.madar-lite .celestial-ring-outer,
+html.madar-lite .celestial-ring-inner,
+html.madar-lite .celestial-orbiting-body {
+  display: none !important;
+}
+
+/* 10) تقليل كلفة الظلال الكبيرة */
+.service-card,
+.portfolio-card,
+.process-step-card,
+.commitment-card,
+.feature-strip-card,
+.testimonial-card,
+.booking-form,
+.commitments-strip-container {
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18) !important;
+}
+html[data-theme="light"] .service-card,
+html[data-theme="light"] .portfolio-card,
+html[data-theme="light"] .process-step-card,
+html[data-theme="light"] .commitment-card,
+html[data-theme="light"] .feature-strip-card,
+html[data-theme="light"] .testimonial-card,
+html[data-theme="light"] .booking-form,
+html[data-theme="light"] .commitments-strip-container {
+  box-shadow: 0 4px 12px rgba(60, 45, 30, 0.06) !important;
 }
 
